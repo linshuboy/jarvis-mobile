@@ -8,6 +8,8 @@
     "userInterfaceStyle": "light",
     "plugins": [
       "./plugins/withAndroidRootKotlinVersion",
+      "./plugins/withAndroidReleaseSigning",
+      "./plugins/withAndroidReleaseSplits",
       [
         "expo-build-properties",
         {
