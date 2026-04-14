@@ -155,7 +155,7 @@ jobs:
           fail_on_unmatched_files: true
 
   mobile-ios:
-    runs-on: macos-latest
+    runs-on: macos-26
     env:
       CI: '1'
       EXPO_NO_TELEMETRY: '1'
