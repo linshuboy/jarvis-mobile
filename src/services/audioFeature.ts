@@ -1,4 +1,11 @@
-import { Audio } from 'expo-av'
+import {
+  AudioModule,
+  getRecordingPermissionsAsync,
+  RecordingPresets,
+  requestRecordingPermissionsAsync,
+  setAudioModeAsync,
+  type PermissionResponse,
+} from 'expo-audio'
 import { AppState, Platform } from 'react-native'
 
 import { clearAudioState, readAudioState, writeAudioState } from '../storage/session'
@@ -112,12 +119,12 @@ function fileNameFromUri(uri: string | null): string | null {
   return uri.slice(index + 1)
 }
 
-async function currentPermissionStatus(interactive: boolean): Promise<Audio.PermissionResponse> {
-  const existing = await Audio.getPermissionsAsync()
+async function currentPermissionStatus(interactive: boolean): Promise<PermissionResponse> {
+  const existing = await getRecordingPermissionsAsync()
   if (existing.granted || !interactive) {
     return existing
   }
-  return Audio.requestPermissionsAsync()
+  return requestRecordingPermissionsAsync()
 }
 
 export async function getAudioState(): Promise<MobileAudioState> {
@@ -160,15 +167,15 @@ export async function recordAudio(options: {
   ensureForeground()
   const durationMs = clampDurationMs(options.durationMs)
 
-  const recording = new Audio.Recording()
+  const recording = new AudioModule.AudioRecorder(RecordingPresets.HIGH_QUALITY)
   try {
-    await Audio.setAudioModeAsync({
-      allowsRecordingIOS: true,
-      playsInSilentModeIOS: true,
-      staysActiveInBackground: false,
+    await setAudioModeAsync({
+      allowsRecording: true,
+      playsInSilentMode: true,
+      shouldPlayInBackground: false,
     })
-    await recording.prepareToRecordAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY)
-    await recording.startAsync()
+    await recording.prepareToRecordAsync()
+    recording.record()
     await persist(
       withState(state, {
         is_recording: true,
@@ -176,9 +183,9 @@ export async function recordAudio(options: {
       }),
     )
     await delay(durationMs)
-    await recording.stopAndUnloadAsync()
-    const status = await recording.getStatusAsync()
-    const uri = recording.getURI()
+    await recording.stop()
+    const status = recording.getStatus()
+    const uri = recording.uri ?? status.url
     const capture: MobileAudioCapture = {
       local_uri: uri || '',
       duration_ms: typeof status.durationMillis === 'number' ? status.durationMillis : durationMs,
@@ -206,8 +213,8 @@ export async function recordAudio(options: {
       : new MobileFeatureError('UPSTREAM_ERROR', error instanceof Error ? error.message : 'recording failed')
   } finally {
     try {
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: false,
+      await setAudioModeAsync({
+        allowsRecording: false,
       })
     } catch {
       // best-effort reset

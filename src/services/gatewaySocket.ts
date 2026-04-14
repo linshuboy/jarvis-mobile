@@ -314,7 +314,7 @@ async function handleRequest(frame: Record<string, unknown>): Promise<void> {
           ...capture,
           permission_status: audioState.permission_status,
           foreground_required: audioState.foreground_required,
-          source: 'expo-av',
+          source: 'expo-audio',
         },
       })
     } catch (error) {

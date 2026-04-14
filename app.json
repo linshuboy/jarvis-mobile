@@ -7,17 +7,8 @@
     "orientation": "portrait",
     "userInterfaceStyle": "light",
     "plugins": [
-      "./plugins/withAndroidRootKotlinVersion",
       "./plugins/withAndroidReleaseSigning",
       "./plugins/withAndroidReleaseSplits",
-      [
-        "expo-build-properties",
-        {
-          "android": {
-            "kotlinVersion": "1.9.25"
-          }
-        }
-      ],
       [
         "expo-location",
         {
@@ -31,11 +22,16 @@
         }
       ],
       [
-        "expo-av",
+        "expo-audio",
         {
-          "microphonePermission": "JARVIS Mobile 需要在你主动使用时访问麦克风，用于执行 audio.record。"
+          "microphonePermission": "JARVIS Mobile 需要在你主动使用时访问麦克风，用于执行 audio.record。",
+          "recordAudioAndroid": true,
+          "enableBackgroundPlayback": false,
+          "enableBackgroundRecording": false
         }
-      ]
+      ],
+      "expo-asset",
+      "expo-secure-store"
     ],
     "assetBundlePatterns": [
       "**/*"
