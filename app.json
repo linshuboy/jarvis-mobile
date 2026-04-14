@@ -7,6 +7,7 @@
     "orientation": "portrait",
     "userInterfaceStyle": "light",
     "plugins": [
+      "./plugins/withAndroidRootKotlinVersion",
       [
         "expo-build-properties",
         {
