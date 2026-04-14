@@ -8,6 +8,14 @@
     "userInterfaceStyle": "light",
     "plugins": [
       [
+        "expo-build-properties",
+        {
+          "android": {
+            "kotlinVersion": "1.9.25"
+          }
+        }
+      ],
+      [
         "expo-location",
         {
           "locationWhenInUsePermission": "JARVIS Mobile 需要在你主动使用时获取定位，用于执行 location.get。"
