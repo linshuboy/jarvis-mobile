@@ -10,12 +10,12 @@ import type {
   RuntimeIdentity,
 } from '../types'
 
-const AUTH_SESSION_KEY = 'jarvis.mobile.auth_session'
-const BINDING_STATE_KEY = 'jarvis.mobile.binding_state'
-const RUNTIME_IDENTITY_KEY = 'jarvis.mobile.runtime_identity'
-const LOCATION_STATE_KEY = 'jarvis.mobile.location_state'
-const CAMERA_STATE_KEY = 'jarvis.mobile.camera_state'
-const AUDIO_STATE_KEY = 'jarvis.mobile.audio_state'
+const AUTH_SESSION_KEY = 'agi.mobile.auth_session'
+const BINDING_STATE_KEY = 'agi.mobile.binding_state'
+const RUNTIME_IDENTITY_KEY = 'agi.mobile.runtime_identity'
+const LOCATION_STATE_KEY = 'agi.mobile.location_state'
+const CAMERA_STATE_KEY = 'agi.mobile.camera_state'
+const AUDIO_STATE_KEY = 'agi.mobile.audio_state'
 
 function randomUuid(): string {
   const maybeCrypto = globalThis.crypto as { randomUUID?: () => string } | undefined
