@@ -1,0 +1,51 @@
+{
+  "expo": {
+    "name": "JARVIS Mobile",
+    "slug": "jarvis-mobile",
+    "scheme": "jarvis-mobile",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "plugins": [
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "JARVIS Mobile 需要在你主动使用时获取定位，用于执行 location.get。"
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "cameraPermission": "JARVIS Mobile 需要在你主动使用时访问相机，用于执行 camera.capture。"
+        }
+      ],
+      [
+        "expo-av",
+        {
+          "microphonePermission": "JARVIS Mobile 需要在你主动使用时访问麦克风，用于执行 audio.record。"
+        }
+      ]
+    ],
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "JARVIS Mobile 需要在你主动使用时获取定位，用于执行 location.get。",
+        "NSCameraUsageDescription": "JARVIS Mobile 需要在你主动使用时访问相机，用于执行 camera.capture。",
+        "NSMicrophoneUsageDescription": "JARVIS Mobile 需要在你主动使用时访问麦克风，用于执行 audio.record。"
+      },
+      "bundleIdentifier": "ai.jarvis.mobile"
+    },
+    "android": {
+      "permissions": [
+        "CAMERA",
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION",
+        "RECORD_AUDIO"
+      ],
+      "package": "ai.jarvis.mobile"
+    }
+  }
+}
