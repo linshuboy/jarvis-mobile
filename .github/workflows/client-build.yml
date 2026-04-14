@@ -1,0 +1,260 @@
+name: client-build
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: 'Upload built assets to the main repository release'
+        required: false
+        default: false
+        type: boolean
+      release_tag:
+        description: 'Release tag in the main repository'
+        required: false
+        type: string
+      main_repository:
+        description: 'Main repository that owns the release'
+        required: false
+        type: string
+      source_repository:
+        description: 'Main repository that requested this build'
+        required: false
+        type: string
+      source_sha:
+        description: 'Main repository source SHA for traceability'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  mobile-android:
+    runs-on: ubuntu-latest
+    env:
+      CI: '1'
+      EXPO_NO_TELEMETRY: '1'
+    defaults:
+      run:
+        working-directory: apps/mobile
+        shell: bash
+    steps:
+      - id: settings
+        name: Resolve settings
+        working-directory: .
+        shell: bash
+        env:
+          MAIN_REPOSITORY: ${{ inputs.main_repository || vars.MAIN_RELEASE_REPOSITORY }}
+          REQUESTED_RELEASE_TAG: ${{ inputs.release_tag }}
+          REQUESTED_PUBLISH_RELEASE: ${{ inputs.publish_release }}
+          CROSS_REPO_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+        run: |
+          set -euo pipefail
+          release_tag="${REQUESTED_RELEASE_TAG:-}"
+          if [[ -z "$release_tag" ]]; then
+            release_tag="${GITHUB_REF_NAME}"
+          fi
+          should_publish=false
+          if [[ "${REQUESTED_PUBLISH_RELEASE:-}" == "true" || "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            should_publish=true
+            if [[ -z "${MAIN_REPOSITORY:-}" ]]; then
+              echo "Missing main_repository input or MAIN_RELEASE_REPOSITORY variable for release upload." >&2
+              exit 1
+            fi
+            if [[ -z "${CROSS_REPO_TOKEN:-}" ]]; then
+              echo "Missing CROSS_REPO_TOKEN secret for release upload." >&2
+              exit 1
+            fi
+          fi
+          echo "main_repository=${MAIN_REPOSITORY:-}" >>"$GITHUB_OUTPUT"
+          echo "release_tag=${release_tag}" >>"$GITHUB_OUTPUT"
+          echo "should_publish=${should_publish}" >>"$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          path: apps/mobile
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20.19.4'
+          cache: npm
+          cache-dependency-path: apps/mobile/package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - name: Install mobile dependencies
+        run: npm ci
+      - name: Run mobile typecheck
+        run: npm run typecheck
+      - name: Verify release version
+        if: startsWith(steps.settings.outputs.release_tag, 'v')
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          if [[ "v${version}" != "${{ steps.settings.outputs.release_tag }}" ]]; then
+            printf 'release tag %s does not match mobile package version %s\n' "${{ steps.settings.outputs.release_tag }}" "$version" >&2
+            exit 1
+          fi
+      - name: Generate Android native project
+        run: npx expo prebuild --platform android --clean --no-install
+      - name: Prepare Android release signing
+        working-directory: apps/mobile/android
+        env:
+          ANDROID_RELEASE_KEYSTORE_BASE64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}
+          ANDROID_RELEASE_STORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_STORE_PASSWORD }}
+          ANDROID_RELEASE_KEY_ALIAS: ${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}
+          ANDROID_RELEASE_KEY_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${ANDROID_RELEASE_KEYSTORE_BASE64:-}" ]]; then
+            echo "Release signing secrets are not available; using debug signing fallback."
+            exit 0
+          fi
+          printf '%s' "${ANDROID_RELEASE_KEYSTORE_BASE64}" | base64 --decode > app/mobile-release.jks
+          printf '\n' >> gradle.properties
+          cat <<EOF >> gradle.properties
+          android.releaseStoreFile=mobile-release.jks
+          android.releaseStorePassword=${ANDROID_RELEASE_STORE_PASSWORD}
+          android.releaseKeyAlias=${ANDROID_RELEASE_KEY_ALIAS}
+          android.releaseKeyPassword=${ANDROID_RELEASE_KEY_PASSWORD}
+          EOF
+      - name: Build Android release APKs
+        working-directory: apps/mobile/android
+        run: ./gradlew assembleRelease
+      - name: Stage Android release APKs
+        run: |
+          set -euo pipefail
+          package_name="$(node -p "require('./package.json').name")"
+          version="$(node -p "require('./package.json').version")"
+          mkdir -p release-assets
+          shopt -s nullglob
+          for apk in android/app/build/outputs/apk/release/*.apk; do
+            base="$(basename "${apk}")"
+            abi="${base#app-}"
+            abi="${abi%-release.apk}"
+            cp "${apk}" "release-assets/${package_name}-${version}-android-${abi}-release.apk"
+          done
+          test "$(find release-assets -type f | wc -l)" -gt 0
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mobile-android-release-apks
+          path: apps/mobile/release-assets/*
+          if-no-files-found: error
+      - uses: softprops/action-gh-release@v2
+        if: steps.settings.outputs.should_publish == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+        with:
+          repository: ${{ steps.settings.outputs.main_repository }}
+          tag_name: ${{ steps.settings.outputs.release_tag }}
+          files: apps/mobile/release-assets/*
+          fail_on_unmatched_files: true
+
+  mobile-ios:
+    runs-on: macos-latest
+    env:
+      CI: '1'
+      EXPO_NO_TELEMETRY: '1'
+    defaults:
+      run:
+        working-directory: apps/mobile
+        shell: bash
+    steps:
+      - id: settings
+        name: Resolve settings
+        working-directory: .
+        shell: bash
+        env:
+          MAIN_REPOSITORY: ${{ inputs.main_repository || vars.MAIN_RELEASE_REPOSITORY }}
+          REQUESTED_RELEASE_TAG: ${{ inputs.release_tag }}
+          REQUESTED_PUBLISH_RELEASE: ${{ inputs.publish_release }}
+          CROSS_REPO_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+        run: |
+          set -euo pipefail
+          release_tag="${REQUESTED_RELEASE_TAG:-}"
+          if [[ -z "$release_tag" ]]; then
+            release_tag="${GITHUB_REF_NAME}"
+          fi
+          should_publish=false
+          if [[ "${REQUESTED_PUBLISH_RELEASE:-}" == "true" || "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            should_publish=true
+            if [[ -z "${MAIN_REPOSITORY:-}" ]]; then
+              echo "Missing main_repository input or MAIN_RELEASE_REPOSITORY variable for release upload." >&2
+              exit 1
+            fi
+            if [[ -z "${CROSS_REPO_TOKEN:-}" ]]; then
+              echo "Missing CROSS_REPO_TOKEN secret for release upload." >&2
+              exit 1
+            fi
+          fi
+          echo "main_repository=${MAIN_REPOSITORY:-}" >>"$GITHUB_OUTPUT"
+          echo "release_tag=${release_tag}" >>"$GITHUB_OUTPUT"
+          echo "should_publish=${should_publish}" >>"$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          path: apps/mobile
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20.19.4'
+          cache: npm
+          cache-dependency-path: apps/mobile/package-lock.json
+      - name: Install mobile dependencies
+        run: npm ci
+      - name: Run mobile typecheck
+        run: npm run typecheck
+      - name: Verify release version
+        if: startsWith(steps.settings.outputs.release_tag, 'v')
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          if [[ "v${version}" != "${{ steps.settings.outputs.release_tag }}" ]]; then
+            printf 'release tag %s does not match mobile package version %s\n' "${{ steps.settings.outputs.release_tag }}" "$version" >&2
+            exit 1
+          fi
+      - name: Generate iOS native project
+        run: npx expo prebuild --platform ios --clean --no-install
+      - name: Install CocoaPods
+        working-directory: apps/mobile/ios
+        run: pod install
+      - name: Build unsigned iOS simulator app
+        run: |
+          set -euo pipefail
+          workspace="$(find ios -maxdepth 1 -name '*.xcworkspace' | head -n1)"
+          project="$(find ios -maxdepth 1 -name '*.xcodeproj' | head -n1)"
+          scheme="$(basename "${project%.xcodeproj}")"
+          xcodebuild \
+            -workspace "${workspace}" \
+            -scheme "${scheme}" \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -derivedDataPath build/ios \
+            CODE_SIGNING_ALLOWED=NO
+      - name: Stage iOS simulator app
+        run: |
+          set -euo pipefail
+          package_name="$(node -p "require('./package.json').name")"
+          version="$(node -p "require('./package.json').version")"
+          app_path="$(find build/ios/Build/Products/Debug-iphonesimulator -maxdepth 1 -name '*.app' -print -quit)"
+          if [[ -z "$app_path" ]]; then
+            echo "No iOS simulator app found." >&2
+            exit 1
+          fi
+          mkdir -p release-assets
+          ditto -c -k --sequesterRsrc --keepParent "$app_path" "release-assets/${package_name}-${version}-ios-simulator.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mobile-ios-simulator-app
+          path: apps/mobile/release-assets/*
+          if-no-files-found: error
+      - uses: softprops/action-gh-release@v2
+        if: steps.settings.outputs.should_publish == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+        with:
+          repository: ${{ steps.settings.outputs.main_repository }}
+          tag_name: ${{ steps.settings.outputs.release_tag }}
+          files: apps/mobile/release-assets/*
+          fail_on_unmatched_files: true
