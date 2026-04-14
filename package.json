@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "expo": "~52.0.0",
+    "expo-asset": "^55.0.15",
     "expo-av": "~15.0.2",
     "expo-build-properties": "^55.0.13",
     "expo-image-picker": "~16.0.0",
