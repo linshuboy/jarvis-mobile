@@ -1,4 +1,5 @@
 import { StatusBar } from 'expo-status-bar'
+import { nativeTokens } from '@agi/frontend'
 import { startTransition, useEffect, useMemo, useState, type ReactNode } from 'react'
 import {
   ActivityIndicator,
@@ -12,7 +13,7 @@ import {
   View,
 } from 'react-native'
 
-import type { MobileCapabilityDescriptor, MobileCompanionSnapshot, MobileCompanionState } from './src/types'
+import type { MobileCompanionSnapshot, MobileCompanionState } from './src/types'
 import { recordAudio, syncAudioState } from './src/services/audioFeature'
 import { capturePhoto, syncCameraState } from './src/services/cameraFeature'
 import { subscribeGatewayConnection, syncMobileGatewayConnection } from './src/services/gatewaySocket'
@@ -24,6 +25,9 @@ import {
   logoutMobileCompanion,
   syncMobileAuthState,
 } from './src/services/mobileCompanion'
+import { createMobileCompanionView } from './src/mobileCompanionView'
+
+const sharedCanvasColor = nativeTokens.color.background.canvas
 
 function formatTimestamp(value: string | null | undefined): string {
   if (!value) {
@@ -36,7 +40,14 @@ function formatTimestamp(value: string | null | undefined): string {
   return date.toLocaleString('zh-CN', { hour12: false })
 }
 
-function CapabilityRow({ item }: { item: MobileCapabilityDescriptor }) {
+type CapabilityDisplayItem = {
+  method: string
+  title: string
+  description: string
+  status: string
+}
+
+function CapabilityRow({ item }: { item: CapabilityDisplayItem }) {
   const tone =
     item.status === 'ready'
       ? styles.capabilityReady
@@ -176,6 +187,19 @@ export default function App() {
     ]
   }, [effectiveAuth?.server_url, snapshot])
 
+  const capabilities = snapshot?.capabilities ?? []
+  const mobileCompanionView = useMemo(
+    () =>
+      createMobileCompanionView({
+        authenticated: Boolean(effectiveAuth?.authenticated),
+        bound: Boolean(snapshot?.binding?.runtime_token),
+        online: Boolean(snapshot?.connection.online),
+        connectionState: snapshot?.connection.connection_state || 'loading',
+        capabilities,
+      }),
+    [capabilities, effectiveAuth?.authenticated, snapshot?.binding?.runtime_token, snapshot?.connection.connection_state, snapshot?.connection.online],
+  )
+
   async function handleLogin() {
     setActionPending(true)
     setFlash('')
@@ -275,8 +299,6 @@ export default function App() {
     }
   }
 
-  const capabilities = snapshot?.capabilities ?? []
-
   return (
     <SafeAreaView style={styles.safeArea}>
       <StatusBar style="dark" />
@@ -284,9 +306,9 @@ export default function App() {
       <ScrollView contentContainerStyle={styles.scrollContent}>
         <View style={styles.hero}>
           <Text style={styles.kicker}>JARVIS Mobile Companion</Text>
-          <Text style={styles.heroTitle}>一个工程，统一业务层，平台能力分层实现。</Text>
+          <Text style={styles.heroTitle}>移动端伴随终端，不伪装成桌面执行设备。</Text>
           <Text style={styles.heroBody}>
-            移动端不承担 `host.fs.* / host.exec.run`。当前首批接通的是登录、当前设备自动绑定、能力矩阵和本地会话持久化。
+            当前前端壳已重新设计：登录、自动绑定、连接状态和 mobile.* 能力聚合到同一条状态语义里；文件与命令执行仍属于桌面/server host。
           </Text>
         </View>
 
@@ -299,6 +321,25 @@ export default function App() {
 
         {flash ? <Text style={styles.flash}>{flash}</Text> : null}
         {error ? <Text style={styles.error}>{error}</Text> : null}
+
+        <View style={styles.mobileStatusDeck}>
+          <View style={styles.mobileStatusPrimary}>
+            <Text style={styles.mobileStatusEyebrow}>当前焦点</Text>
+            <Text style={styles.mobileStatusValue}>{mobileCompanionView.primary.value}</Text>
+            <Text style={styles.mobileStatusLabel}>{mobileCompanionView.primary.label}</Text>
+          </View>
+          <View style={styles.mobileStatusGrid}>
+            {mobileCompanionView.statusItems.map((item) => (
+              <View key={item.label} style={styles.mobileStatusItem}>
+                <View style={[styles.mobileStatusDot, { backgroundColor: item.accent }]} />
+                <View style={styles.mobileStatusCopy}>
+                  <Text style={styles.mobileStatusItemLabel}>{item.label}</Text>
+                  <Text style={styles.mobileStatusItemValue}>{item.value}</Text>
+                </View>
+              </View>
+            ))}
+          </View>
+        </View>
 
         <Card title="设备概览" eyebrow="Snapshot">
           <View style={styles.metricsGrid}>
@@ -553,10 +594,10 @@ export default function App() {
 
         <Card title="能力矩阵" eyebrow="Platform Surface">
           <Text style={styles.cardBody}>
-            共享业务层只处理登录、绑定、通知入口和权限状态。具体采集能力按平台拆分，不把 iOS 和 Android 强行拉平。
+            共享业务层只展示 mobile companion 能力。已过滤 {mobileCompanionView.capabilities.hostFilteredCount} 项桌面 host 能力，避免把手机端伪装成文件/命令执行设备。
           </Text>
           <View style={styles.capabilityList}>
-            {capabilities.map((item) => (
+            {mobileCompanionView.capabilities.items.map((item) => (
               <CapabilityRow key={item.method} item={item} />
             ))}
           </View>
@@ -569,7 +610,7 @@ export default function App() {
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: '#f5ede3',
+    backgroundColor: sharedCanvasColor,
   },
   backgroundTop: {
     position: 'absolute',
@@ -577,7 +618,7 @@ const styles = StyleSheet.create({
     right: 0,
     left: 0,
     height: 260,
-    backgroundColor: '#efc58d',
+    backgroundColor: '#cbd9c6',
   },
   scrollContent: {
     paddingHorizontal: 18,
@@ -586,14 +627,14 @@ const styles = StyleSheet.create({
     gap: 16,
   },
   hero: {
-    backgroundColor: '#1d140f',
-    borderRadius: 28,
+    backgroundColor: '#1e2523',
+    borderRadius: 30,
     paddingHorizontal: 22,
     paddingVertical: 24,
     gap: 10,
   },
   kicker: {
-    color: '#efc58d',
+    color: '#a9c4ae',
     fontSize: 12,
     fontWeight: '700',
     letterSpacing: 1.4,
@@ -601,14 +642,77 @@ const styles = StyleSheet.create({
   },
   heroTitle: {
     color: '#fff7ef',
-    fontSize: 28,
-    lineHeight: 34,
+    fontSize: 30,
+    lineHeight: 36,
     fontWeight: '800',
   },
   heroBody: {
-    color: '#d7c2b2',
+    color: '#d5ded5',
     fontSize: 15,
     lineHeight: 22,
+  },
+  mobileStatusDeck: {
+    backgroundColor: '#fffaf0',
+    borderColor: '#ded6c8',
+    borderWidth: 1,
+    borderRadius: 26,
+    padding: 16,
+    gap: 14,
+  },
+  mobileStatusPrimary: {
+    backgroundColor: '#e7efe6',
+    borderRadius: 22,
+    paddingHorizontal: 18,
+    paddingVertical: 16,
+  },
+  mobileStatusEyebrow: {
+    color: '#556b2f',
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 1.1,
+    textTransform: 'uppercase',
+  },
+  mobileStatusValue: {
+    color: '#1e2523',
+    fontSize: 24,
+    fontWeight: '900',
+    marginTop: 6,
+  },
+  mobileStatusLabel: {
+    color: '#52605b',
+    fontSize: 13,
+    marginTop: 4,
+  },
+  mobileStatusGrid: {
+    gap: 10,
+  },
+  mobileStatusItem: {
+    alignItems: 'center',
+    backgroundColor: '#f7f1e7',
+    borderRadius: 18,
+    flexDirection: 'row',
+    gap: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  mobileStatusDot: {
+    borderRadius: 5,
+    height: 10,
+    width: 10,
+  },
+  mobileStatusCopy: {
+    flex: 1,
+  },
+  mobileStatusItemLabel: {
+    color: '#7b8680',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  mobileStatusItemValue: {
+    color: '#1e2523',
+    fontSize: 14,
+    fontWeight: '800',
+    marginTop: 2,
   },
   loadingBlock: {
     paddingVertical: 24,
