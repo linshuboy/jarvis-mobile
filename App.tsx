@@ -305,7 +305,7 @@ export default function App() {
       <View style={styles.backgroundTop} />
       <ScrollView contentContainerStyle={styles.scrollContent}>
         <View style={styles.hero}>
-          <Text style={styles.kicker}>JARVIS Mobile Companion</Text>
+          <Text style={styles.kicker}>Sunvisai Mobile Companion</Text>
           <Text style={styles.heroTitle}>移动端伴随终端，不伪装成桌面执行设备。</Text>
           <Text style={styles.heroBody}>
             当前前端壳已重新设计：登录、自动绑定、连接状态和 mobile.* 能力聚合到同一条状态语义里；文件与命令执行仍属于桌面/server host。
@@ -378,7 +378,7 @@ export default function App() {
             autoCorrect={false}
             keyboardType="url"
             onChangeText={setServerUrlInput}
-            placeholder="https://jarvis.example.com"
+            placeholder="https://sunvisai.example.com"
             placeholderTextColor="#8d7f74"
             style={styles.input}
             value={serverUrlInput}

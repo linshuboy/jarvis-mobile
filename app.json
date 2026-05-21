@@ -1,8 +1,8 @@
 {
   "expo": {
-    "name": "JARVIS Mobile",
-    "slug": "jarvis-mobile",
-    "scheme": "jarvis-mobile",
+    "name": "Sunvisai Mobile",
+    "slug": "sunvisai-mobile",
+    "scheme": "sunvisai-mobile",
     "version": "0.1.0",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
@@ -12,19 +12,19 @@
       [
         "expo-location",
         {
-          "locationWhenInUsePermission": "JARVIS Mobile 需要在你主动使用时获取定位，用于执行 location.get。"
+          "locationWhenInUsePermission": "Sunvisai Mobile 需要在你主动使用时获取定位，用于执行 location.get。"
         }
       ],
       [
         "expo-image-picker",
         {
-          "cameraPermission": "JARVIS Mobile 需要在你主动使用时访问相机，用于执行 camera.capture。"
+          "cameraPermission": "Sunvisai Mobile 需要在你主动使用时访问相机，用于执行 camera.capture。"
         }
       ],
       [
         "expo-audio",
         {
-          "microphonePermission": "JARVIS Mobile 需要在你主动使用时访问麦克风，用于执行 audio.record。",
+          "microphonePermission": "Sunvisai Mobile 需要在你主动使用时访问麦克风，用于执行 audio.record。",
           "recordAudioAndroid": true,
           "enableBackgroundPlayback": false,
           "enableBackgroundRecording": false
@@ -39,11 +39,11 @@
     "ios": {
       "supportsTablet": true,
       "infoPlist": {
-        "NSLocationWhenInUseUsageDescription": "JARVIS Mobile 需要在你主动使用时获取定位，用于执行 location.get。",
-        "NSCameraUsageDescription": "JARVIS Mobile 需要在你主动使用时访问相机，用于执行 camera.capture。",
-        "NSMicrophoneUsageDescription": "JARVIS Mobile 需要在你主动使用时访问麦克风，用于执行 audio.record。"
+        "NSLocationWhenInUseUsageDescription": "Sunvisai Mobile 需要在你主动使用时获取定位，用于执行 location.get。",
+        "NSCameraUsageDescription": "Sunvisai Mobile 需要在你主动使用时访问相机，用于执行 camera.capture。",
+        "NSMicrophoneUsageDescription": "Sunvisai Mobile 需要在你主动使用时访问麦克风，用于执行 audio.record。"
       },
-      "bundleIdentifier": "ai.jarvis.mobile"
+      "bundleIdentifier": "ai.sunvisai.mobile"
     },
     "android": {
       "permissions": [
@@ -52,7 +52,7 @@
         "ACCESS_FINE_LOCATION",
         "RECORD_AUDIO"
       ],
-      "package": "ai.jarvis.mobile"
+      "package": "ai.sunvisai.mobile"
     }
   }
 }
