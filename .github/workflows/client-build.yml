@@ -117,6 +117,13 @@ jobs:
       - uses: android-actions/setup-android@v3
       - name: Install mobile dependencies
         run: npm ci
+      - name: Materialize shared frontend package for Metro
+        run: |
+          set -euo pipefail
+          rm -rf node_modules/@agi/frontend
+          mkdir -p node_modules/@agi
+          cp -R ../../packages/frontend node_modules/@agi/frontend
+          rm -rf node_modules/@agi/frontend/node_modules
       - name: Run mobile typecheck
         run: npm run typecheck
       - name: Verify release version
@@ -259,6 +266,13 @@ jobs:
         run: npm ci
       - name: Install mobile dependencies
         run: npm ci
+      - name: Materialize shared frontend package for Metro
+        run: |
+          set -euo pipefail
+          rm -rf node_modules/@agi/frontend
+          mkdir -p node_modules/@agi
+          cp -R ../../packages/frontend node_modules/@agi/frontend
+          rm -rf node_modules/@agi/frontend/node_modules
       - name: Run mobile typecheck
         run: npm run typecheck
       - name: Verify release version
