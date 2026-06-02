@@ -130,6 +130,43 @@ export type MobileCompanionSnapshot = {
   capabilities: MobileCapabilityDescriptor[]
 }
 
+export type ClientReleaseAsset = {
+  name: string
+  component: 'hostd' | 'desktop' | 'mobile' | 'unknown'
+  platform: string | null
+  arch: string | null
+  kind: string | null
+  url: string
+  sha256: string
+  size: number
+}
+
+export type ClientReleaseManifest = {
+  schemaVersion: number
+  release: {
+    version: string
+    channel: string
+    sourceRepository: string
+    sourceSha: string
+    createdAt: string
+  }
+  clients: {
+    hostd: ClientReleaseAsset[]
+    desktop: ClientReleaseAsset[]
+    mobile: ClientReleaseAsset[]
+  }
+}
+
+export type MobileClientUpdateCheck = {
+  manifest_url: string
+  current_version: string
+  latest_version: string
+  update_available: boolean
+  checked_at: string
+  asset: ClientReleaseAsset | null
+  all_assets: ClientReleaseAsset[]
+}
+
 export type AuthBootstrapStatus = {
   init_done: boolean
 }

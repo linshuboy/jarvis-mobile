@@ -13,9 +13,14 @@ import {
   View,
 } from 'react-native'
 
-import type { MobileCompanionSnapshot, MobileCompanionState } from './src/types'
+import type { MobileClientUpdateCheck, MobileCompanionSnapshot, MobileCompanionState } from './src/types'
 import { recordAudio, syncAudioState } from './src/services/audioFeature'
 import { capturePhoto, syncCameraState } from './src/services/cameraFeature'
+import {
+  checkMobileClientUpdate,
+  downloadMobileClientUpdate,
+  releaseManifestUrl,
+} from './src/services/clientUpdates'
 import { subscribeGatewayConnection, syncMobileGatewayConnection } from './src/services/gatewaySocket'
 import { syncLocationState } from './src/services/locationFeature'
 import {
@@ -107,6 +112,10 @@ export default function App() {
   const [actionPending, setActionPending] = useState(false)
   const [flash, setFlash] = useState('')
   const [error, setError] = useState('')
+  const [clientUpdate, setClientUpdate] = useState<MobileClientUpdateCheck | null>(null)
+  const [clientUpdatePending, setClientUpdatePending] = useState(false)
+  const [clientUpdateMessage, setClientUpdateMessage] = useState('')
+  const [clientUpdateError, setClientUpdateError] = useState('')
 
   async function refreshSnapshot() {
     const next = await getMobileSnapshot()
@@ -264,6 +273,39 @@ export default function App() {
       setError(nextError instanceof Error ? nextError.message : '刷新定位失败')
     } finally {
       setActionPending(false)
+    }
+  }
+
+  async function handleCheckClientUpdate() {
+    setClientUpdatePending(true)
+    setClientUpdateMessage('')
+    setClientUpdateError('')
+    try {
+      const next = await checkMobileClientUpdate()
+      setClientUpdate(next)
+      setClientUpdateMessage(next.update_available ? `发现新版本 ${next.latest_version}` : '当前已是最新版本')
+    } catch (nextError) {
+      setClientUpdateError(nextError instanceof Error ? nextError.message : '检查客户端更新失败')
+    } finally {
+      setClientUpdatePending(false)
+    }
+  }
+
+  async function handleDownloadClientUpdate() {
+    if (!clientUpdate?.asset) {
+      setClientUpdateError('当前设备没有匹配的移动端安装包')
+      return
+    }
+    setClientUpdatePending(true)
+    setClientUpdateMessage('')
+    setClientUpdateError('')
+    try {
+      await downloadMobileClientUpdate(clientUpdate.asset)
+      setClientUpdateMessage('已交给系统浏览器/安装器处理，文件会进入系统默认下载位置')
+    } catch (nextError) {
+      setClientUpdateError(nextError instanceof Error ? nextError.message : '打开客户端下载地址失败')
+    } finally {
+      setClientUpdatePending(false)
     }
   }
 
@@ -458,6 +500,51 @@ export default function App() {
               <Text style={styles.secondaryButtonText}>重新绑定当前设备</Text>
             </Pressable>
           </View>
+        </Card>
+
+        <Card title="客户端更新" eyebrow="Client Update">
+          <Text style={styles.cardBody}>
+            移动端不执行后台静默安装。检查到新包后会打开系统下载地址，由系统浏览器或安装器保存到默认下载位置。
+          </Text>
+          <View style={styles.inlinePanel}>
+            <Text style={styles.inlinePanelTitle}>更新状态</Text>
+            <Text style={styles.inlinePanelBody}>
+              current={clientUpdate?.current_version || '0.1.6'}，latest={clientUpdate?.latest_version || '尚未检查'}
+            </Text>
+            <Text style={styles.inlinePanelBody}>
+              status=
+              {clientUpdate ? (clientUpdate.update_available ? '发现新版本' : '已是最新') : '未检查'}
+            </Text>
+            <Text style={styles.inlinePanelBody}>asset={clientUpdate?.asset?.name || '未匹配'}</Text>
+            <Text style={styles.inlinePanelBody}>manifest={releaseManifestUrl()}</Text>
+            <Text style={styles.inlinePanelBody}>
+              checked_at={formatTimestamp(clientUpdate?.checked_at)}
+            </Text>
+          </View>
+          <View style={styles.buttonRow}>
+            <Pressable
+              disabled={clientUpdatePending}
+              onPress={handleCheckClientUpdate}
+              style={({ pressed }) => [
+                styles.secondaryButton,
+                (pressed || clientUpdatePending) && styles.buttonPressed,
+              ]}
+            >
+              <Text style={styles.secondaryButtonText}>{clientUpdatePending ? '处理中…' : '手动检查更新'}</Text>
+            </Pressable>
+            <Pressable
+              disabled={clientUpdatePending || !clientUpdate?.asset}
+              onPress={handleDownloadClientUpdate}
+              style={({ pressed }) => [
+                styles.primaryButton,
+                (pressed || clientUpdatePending || !clientUpdate?.asset) && styles.buttonPressed,
+              ]}
+            >
+              <Text style={styles.primaryButtonText}>下载客户端文件</Text>
+            </Pressable>
+          </View>
+          {clientUpdateMessage ? <Text style={styles.flash}>{clientUpdateMessage}</Text> : null}
+          {clientUpdateError ? <Text style={styles.error}>{clientUpdateError}</Text> : null}
         </Card>
 
         <Card title="定位能力" eyebrow="location.get">
