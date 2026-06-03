@@ -4,10 +4,21 @@ import type { ClientReleaseAsset, ClientReleaseManifest, MobileClientUpdateCheck
 
 const DEFAULT_RELEASE_MANIFEST_URL =
   'https://github.com/linshuboy/JARVISAI/releases/latest/download/release-manifest.json'
-const CURRENT_MOBILE_VERSION = '0.1.8'
+const CURRENT_MOBILE_VERSION = '0.1.9'
 
 export function releaseManifestUrl(): string {
   return DEFAULT_RELEASE_MANIFEST_URL
+}
+
+function proxiedUrl(url: string, proxyUrl: string): string {
+  const trimmed = proxyUrl.trim()
+  if (!trimmed) {
+    return url
+  }
+  if (trimmed.includes('{url}')) {
+    return trimmed.split('{url}').join(encodeURIComponent(url))
+  }
+  return `${trimmed.replace(/\/+$/, '')}/${url}`
 }
 
 function normalizeArch(value: string): string {
@@ -61,9 +72,9 @@ function selectMobileAsset(manifest: ClientReleaseManifest): ClientReleaseAsset 
   return candidates[0] ?? null
 }
 
-export async function checkMobileClientUpdate(): Promise<MobileClientUpdateCheck> {
+export async function checkMobileClientUpdate(proxyUrl = ''): Promise<MobileClientUpdateCheck> {
   const manifestUrl = releaseManifestUrl()
-  const response = await fetch(manifestUrl, { headers: { Accept: 'application/json' } })
+  const response = await fetch(proxiedUrl(manifestUrl, proxyUrl), { headers: { Accept: 'application/json' } })
   if (!response.ok) {
     throw new Error(`检查更新失败：${response.status} ${response.statusText}`.trim())
   }
@@ -71,6 +82,7 @@ export async function checkMobileClientUpdate(): Promise<MobileClientUpdateCheck
   const latestVersion = String(manifest.release?.version || '')
   return {
     manifest_url: manifestUrl,
+    proxy_url: proxyUrl.trim() || undefined,
     current_version: CURRENT_MOBILE_VERSION,
     latest_version: latestVersion,
     update_available: Boolean(latestVersion && latestVersion !== CURRENT_MOBILE_VERSION),
@@ -80,8 +92,8 @@ export async function checkMobileClientUpdate(): Promise<MobileClientUpdateCheck
   }
 }
 
-export async function downloadMobileClientUpdate(asset: ClientReleaseAsset): Promise<void> {
-  const url = asset.url.trim()
+export async function downloadMobileClientUpdate(asset: ClientReleaseAsset, proxyUrl = ''): Promise<void> {
+  const url = proxiedUrl(asset.url.trim(), proxyUrl)
   if (!url) {
     throw new Error('客户端文件下载地址为空')
   }

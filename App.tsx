@@ -31,6 +31,7 @@ import {
   syncMobileAuthState,
 } from './src/services/mobileCompanion'
 import { createMobileCompanionView } from './src/mobileCompanionView'
+import { readUpdateProxyUrl, writeUpdateProxyUrl } from './src/storage/session'
 
 const sharedCanvasColor = nativeTokens.color.background.canvas
 
@@ -116,6 +117,7 @@ export default function App() {
   const [clientUpdatePending, setClientUpdatePending] = useState(false)
   const [clientUpdateMessage, setClientUpdateMessage] = useState('')
   const [clientUpdateError, setClientUpdateError] = useState('')
+  const [clientUpdateProxyInput, setClientUpdateProxyInput] = useState('')
 
   async function refreshSnapshot() {
     const next = await getMobileSnapshot()
@@ -147,6 +149,22 @@ export default function App() {
         }
         setError(nextError instanceof Error ? nextError.message : '加载移动端状态失败')
         setLoading(false)
+      })
+    return () => {
+      disposed = true
+    }
+  }, [])
+
+  useEffect(() => {
+    let disposed = false
+    readUpdateProxyUrl()
+      .then((value) => {
+        if (!disposed) {
+          setClientUpdateProxyInput(value)
+        }
+      })
+      .catch(() => {
+        return
       })
     return () => {
       disposed = true
@@ -277,11 +295,13 @@ export default function App() {
   }
 
   async function handleCheckClientUpdate() {
+    const proxyUrl = clientUpdateProxyInput.trim()
     setClientUpdatePending(true)
     setClientUpdateMessage('')
     setClientUpdateError('')
     try {
-      const next = await checkMobileClientUpdate()
+      await writeUpdateProxyUrl(proxyUrl)
+      const next = await checkMobileClientUpdate(proxyUrl)
       setClientUpdate(next)
       setClientUpdateMessage(next.update_available ? `发现新版本 ${next.latest_version}` : '当前已是最新版本')
     } catch (nextError) {
@@ -296,11 +316,13 @@ export default function App() {
       setClientUpdateError('当前设备没有匹配的移动端安装包')
       return
     }
+    const proxyUrl = clientUpdateProxyInput.trim()
     setClientUpdatePending(true)
     setClientUpdateMessage('')
     setClientUpdateError('')
     try {
-      await downloadMobileClientUpdate(clientUpdate.asset)
+      await writeUpdateProxyUrl(proxyUrl)
+      await downloadMobileClientUpdate(clientUpdate.asset, proxyUrl)
       setClientUpdateMessage('已交给系统浏览器/安装器处理，文件会进入系统默认下载位置')
     } catch (nextError) {
       setClientUpdateError(nextError instanceof Error ? nextError.message : '打开客户端下载地址失败')
@@ -504,12 +526,23 @@ export default function App() {
 
         <Card title="客户端更新" eyebrow="Client Update">
           <Text style={styles.cardBody}>
-            移动端不执行后台静默安装。检查到新包后会打开系统下载地址，由系统浏览器或安装器保存到默认下载位置。
+            移动端不执行后台静默安装。检查到新包后会打开系统下载地址，由系统浏览器或安装器保存到默认下载位置。GitHub 慢时可配置 URL 代理模板。
           </Text>
+          <Text style={styles.fieldLabel}>更新代理 URL</Text>
+          <TextInput
+            autoCapitalize="none"
+            autoCorrect={false}
+            keyboardType="url"
+            onChangeText={setClientUpdateProxyInput}
+            placeholder="https://gh-proxy.example/{url}"
+            placeholderTextColor="#8d7f74"
+            style={styles.input}
+            value={clientUpdateProxyInput}
+          />
           <View style={styles.inlinePanel}>
             <Text style={styles.inlinePanelTitle}>更新状态</Text>
             <Text style={styles.inlinePanelBody}>
-              current={clientUpdate?.current_version || '0.1.8'}，latest={clientUpdate?.latest_version || '尚未检查'}
+              current={clientUpdate?.current_version || '0.1.9'}，latest={clientUpdate?.latest_version || '尚未检查'}
             </Text>
             <Text style={styles.inlinePanelBody}>
               status=
@@ -517,6 +550,7 @@ export default function App() {
             </Text>
             <Text style={styles.inlinePanelBody}>asset={clientUpdate?.asset?.name || '未匹配'}</Text>
             <Text style={styles.inlinePanelBody}>manifest={releaseManifestUrl()}</Text>
+            <Text style={styles.inlinePanelBody}>proxy={clientUpdateProxyInput.trim() || '未配置'}</Text>
             <Text style={styles.inlinePanelBody}>
               checked_at={formatTimestamp(clientUpdate?.checked_at)}
             </Text>

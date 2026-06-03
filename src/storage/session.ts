@@ -16,6 +16,7 @@ const RUNTIME_IDENTITY_KEY = 'agi.mobile.runtime_identity'
 const LOCATION_STATE_KEY = 'agi.mobile.location_state'
 const CAMERA_STATE_KEY = 'agi.mobile.camera_state'
 const AUDIO_STATE_KEY = 'agi.mobile.audio_state'
+const UPDATE_PROXY_KEY = 'agi.mobile.client_update_proxy_url'
 
 function randomUuid(): string {
   const maybeCrypto = globalThis.crypto as { randomUUID?: () => string } | undefined
@@ -128,6 +129,18 @@ export function writeAudioState(value: MobileAudioState): Promise<void> {
 
 export function clearAudioState(): Promise<void> {
   return deleteRaw(AUDIO_STATE_KEY)
+}
+
+export function readUpdateProxyUrl(): Promise<string> {
+  return readRaw(UPDATE_PROXY_KEY).then((value) => value?.trim() || '')
+}
+
+export function writeUpdateProxyUrl(value: string): Promise<void> {
+  const trimmed = value.trim()
+  if (!trimmed) {
+    return deleteRaw(UPDATE_PROXY_KEY)
+  }
+  return writeRaw(UPDATE_PROXY_KEY, trimmed)
 }
 
 export async function ensureRuntimeIdentity(): Promise<RuntimeIdentity> {

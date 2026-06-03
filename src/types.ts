@@ -159,6 +159,7 @@ export type ClientReleaseManifest = {
 
 export type MobileClientUpdateCheck = {
   manifest_url: string
+  proxy_url?: string
   current_version: string
   latest_version: string
   update_available: boolean
