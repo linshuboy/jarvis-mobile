@@ -147,6 +147,7 @@ export type ClientReleaseManifest = {
     version: string
     channel: string
     sourceRepository: string
+    distributionRepository?: string
     sourceSha: string
     createdAt: string
   }

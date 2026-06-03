@@ -3,8 +3,8 @@ import { Linking, Platform } from 'react-native'
 import type { ClientReleaseAsset, ClientReleaseManifest, MobileClientUpdateCheck } from '../types'
 
 const DEFAULT_RELEASE_MANIFEST_URL =
-  'https://github.com/linshuboy/JARVISAI/releases/latest/download/release-manifest.json'
-const CURRENT_MOBILE_VERSION = '0.1.9'
+  'https://github.com/linshuboy/jarvisai-releases/releases/latest/download/release-manifest.json'
+const CURRENT_MOBILE_VERSION = '0.1.10'
 
 export function releaseManifestUrl(): string {
   return DEFAULT_RELEASE_MANIFEST_URL
