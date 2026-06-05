@@ -4,7 +4,7 @@ import type { ClientReleaseAsset, ClientReleaseManifest, MobileClientUpdateCheck
 
 const DEFAULT_RELEASE_MANIFEST_URL =
   'https://github.com/linshuboy/jarvisai-releases/releases/latest/download/release-manifest.json'
-const CURRENT_MOBILE_VERSION = '0.1.10'
+const CURRENT_MOBILE_VERSION = '0.1.11'
 
 export function releaseManifestUrl(): string {
   return DEFAULT_RELEASE_MANIFEST_URL
@@ -19,6 +19,16 @@ function proxiedUrl(url: string, proxyUrl: string): string {
     return trimmed.split('{url}').join(encodeURIComponent(url))
   }
   return `${trimmed.replace(/\/+$/, '')}/${url}`
+}
+
+function comparableReleaseVersion(value: string): string {
+  return value.trim().replace(/^[vV]/, '')
+}
+
+function releaseUpdateAvailable(latestVersion: string, currentVersion: string): boolean {
+  const latest = comparableReleaseVersion(latestVersion)
+  const current = comparableReleaseVersion(currentVersion)
+  return Boolean(latest && latest !== current)
 }
 
 function normalizeArch(value: string): string {
@@ -85,7 +95,7 @@ export async function checkMobileClientUpdate(proxyUrl = ''): Promise<MobileClie
     proxy_url: proxyUrl.trim() || undefined,
     current_version: CURRENT_MOBILE_VERSION,
     latest_version: latestVersion,
-    update_available: Boolean(latestVersion && latestVersion !== CURRENT_MOBILE_VERSION),
+    update_available: releaseUpdateAvailable(latestVersion, CURRENT_MOBILE_VERSION),
     checked_at: new Date().toISOString(),
     asset: selectMobileAsset(manifest),
     all_assets: Array.isArray(manifest.clients?.mobile) ? manifest.clients.mobile : [],
