@@ -4,7 +4,7 @@ import type { ClientReleaseAsset, ClientReleaseManifest, MobileClientUpdateCheck
 
 const DEFAULT_RELEASE_MANIFEST_URL =
   'https://github.com/linshuboy/jarvisai-releases/releases/latest/download/release-manifest.json'
-const CURRENT_MOBILE_VERSION = '0.1.13'
+const CURRENT_MOBILE_VERSION = '0.1.14'
 
 export function releaseManifestUrl(): string {
   return DEFAULT_RELEASE_MANIFEST_URL
