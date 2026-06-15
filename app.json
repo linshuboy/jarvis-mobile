@@ -3,7 +3,7 @@
     "name": "Sunvisai Mobile",
     "slug": "sunvisai-mobile",
     "scheme": "sunvisai-mobile",
-    "version": "0.1.18",
+    "version": "0.1.19",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
     "plugins": [
