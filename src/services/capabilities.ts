@@ -59,13 +59,21 @@ const SHARED_CAPABILITIES: MobileCapabilityDescriptor[] = [
     status: 'ready',
     declare_on_runtime: true,
   },
+  {
+    method: 'audio.stream',
+    title: '实时录音流',
+    description: '规划接入原生音频流，用于唤醒词、VAD 和实时语音输入；必须受系统麦克风权限与可见运行状态约束。',
+    platform: 'shared',
+    status: 'planned',
+    declare_on_runtime: false,
+  },
 ]
 
 const IOS_CAPABILITIES: MobileCapabilityDescriptor[] = [
   {
     method: 'screen.capture',
     title: '系统级截图',
-    description: 'iOS 不承诺通用全局截图能力，不作为正式 mobile surface。',
+    description: 'iOS 不承诺通用跨 App 截屏能力，只评估 App 内截图或 ReplayKit 用户可见录屏/广播入口。',
     platform: 'ios',
     status: 'unsupported',
     declare_on_runtime: false,
@@ -84,7 +92,7 @@ const ANDROID_CAPABILITIES: MobileCapabilityDescriptor[] = [
   {
     method: 'screen.capture',
     title: '屏幕捕获',
-    description: 'Android 后续可在显式授权后接入 MediaProjection，但不作为首批必做能力。',
+    description: 'Android 后续可在用户显式授权后通过 MediaProjection 接入，并由可见前台服务维持捕获会话。',
     platform: 'android',
     status: 'planned',
     declare_on_runtime: false,

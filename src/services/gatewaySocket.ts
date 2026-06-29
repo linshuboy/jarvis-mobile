@@ -11,6 +11,7 @@ import type {
 import { Platform } from 'react-native'
 
 const HEARTBEAT_SECONDS = 20
+const RUNTIME_TTL_SECONDS = 60
 const HANDSHAKE_TIMEOUT_MS = 5000
 const MAX_RECONNECT_DELAY_MS = 30000
 
@@ -359,7 +360,7 @@ function scheduleHeartbeat(): void {
         event: 'node.heartbeat',
         payload: {
           runtimeId: desiredConnection.runtime.runtime_id,
-          ttlSeconds: HEARTBEAT_SECONDS,
+          ttlSeconds: RUNTIME_TTL_SECONDS,
           runtime: {
             displayName: desiredConnection.runtime.display_name,
             metadata: desiredConnection.runtime.metadata,
@@ -429,7 +430,7 @@ async function openConnection(): Promise<void> {
           auth: {
             token: desiredConnection.runtimeToken,
           },
-          ttlSeconds: HEARTBEAT_SECONDS,
+          ttlSeconds: RUNTIME_TTL_SECONDS,
           runtime: {
             id: desiredConnection.runtime.runtime_id,
             displayName: desiredConnection.runtime.display_name,
@@ -437,7 +438,7 @@ async function openConnection(): Promise<void> {
             platform: desiredConnection.runtime.platform,
             version: desiredConnection.runtime.runtime_version,
             metadata: desiredConnection.runtime.metadata,
-            ttlSeconds: HEARTBEAT_SECONDS,
+            ttlSeconds: RUNTIME_TTL_SECONDS,
           },
           components: desiredConnection.runtime.components.map((item) => ({
             componentId: item.component_id,

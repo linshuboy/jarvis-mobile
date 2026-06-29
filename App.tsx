@@ -542,7 +542,7 @@ export default function App() {
           <View style={styles.inlinePanel}>
             <Text style={styles.inlinePanelTitle}>更新状态</Text>
             <Text style={styles.inlinePanelBody}>
-              current={clientUpdate?.current_version || '0.1.19'}，latest={clientUpdate?.latest_version || '尚未检查'}
+              current={clientUpdate?.current_version || '0.1.20'}，latest={clientUpdate?.latest_version || '尚未检查'}
             </Text>
             <Text style={styles.inlinePanelBody}>
               status=
@@ -669,7 +669,7 @@ export default function App() {
 
         <Card title="录音能力" eyebrow="audio.record">
           <Text style={styles.cardBody}>
-            `audio.record` 已接入真实实现，默认录制 5 秒短音频。它和相机一样属于前台交互能力，不支持后台静默录音。
+            `audio.record` 已接入真实实现，默认录制 5 秒短音频。实时录音会作为 `audio.stream` 原生能力单独接入，并受系统麦克风权限和可见运行状态约束。
           </Text>
           <View style={styles.inlinePanel}>
             <Text style={styles.inlinePanelTitle}>录音状态</Text>

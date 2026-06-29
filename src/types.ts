@@ -132,7 +132,7 @@ export type MobileCompanionSnapshot = {
 
 export type ClientReleaseAsset = {
   name: string
-  component: 'hostd' | 'desktop' | 'mobile' | 'unknown'
+  component: 'hostd' | 'desktop' | 'mobile' | 'android_tv' | 'unknown'
   platform: string | null
   arch: string | null
   kind: string | null
@@ -155,6 +155,7 @@ export type ClientReleaseManifest = {
     hostd: ClientReleaseAsset[]
     desktop: ClientReleaseAsset[]
     mobile: ClientReleaseAsset[]
+    android_tv?: ClientReleaseAsset[]
   }
 }
 
