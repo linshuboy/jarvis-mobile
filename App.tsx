@@ -542,7 +542,7 @@ export default function App() {
           <View style={styles.inlinePanel}>
             <Text style={styles.inlinePanelTitle}>更新状态</Text>
             <Text style={styles.inlinePanelBody}>
-              current={clientUpdate?.current_version || '0.1.20'}，latest={clientUpdate?.latest_version || '尚未检查'}
+              current={clientUpdate?.current_version || '0.1.21'}，latest={clientUpdate?.latest_version || '尚未检查'}
             </Text>
             <Text style={styles.inlinePanelBody}>
               status=
