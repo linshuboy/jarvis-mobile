@@ -11,6 +11,16 @@ export type MobileCompanionViewInput = {
 }
 
 export function createMobileCompanionView(input: MobileCompanionViewInput) {
+  const semanticCapabilities = input.capabilities.map((capability) => {
+    if (capability.method.startsWith('host.') || capability.method.startsWith('mobile.')) {
+      return capability
+    }
+    return {
+      ...capability,
+      method: `mobile.${capability.method}`,
+    }
+  })
+
   return createMobileCompanionSummary({
     status: {
       authenticated: input.authenticated,
@@ -19,6 +29,6 @@ export function createMobileCompanionView(input: MobileCompanionViewInput) {
       connectionState: input.connectionState,
       capabilityCount: input.capabilities.length,
     },
-    capabilities: input.capabilities,
+    capabilities: semanticCapabilities,
   })
 }

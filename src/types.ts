@@ -14,6 +14,7 @@ export type MobileCompanionState = {
 }
 
 export type MobileBindingState = {
+  server_url: string
   runtime_id: string
   runtime_token: string
   pairing_state: string

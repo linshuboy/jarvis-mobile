@@ -35,3 +35,7 @@ if (companionView.primary.label !== '连接') {
 if (companionView.capabilities.items.some((item) => item.method.startsWith('host.'))) {
   throw new Error('Mobile companion view exposed host capabilities')
 }
+
+if (!companionView.capabilities.items.every((item) => item.method.startsWith('mobile.'))) {
+  throw new Error('Mobile companion view must expose mobile-scoped capability semantics')
+}

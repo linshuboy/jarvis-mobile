@@ -9,6 +9,7 @@ import type {
   MobileLocationState,
   RuntimeIdentity,
 } from '../types'
+import { createSerializedAsyncValue } from './serializedAsyncValue'
 
 const AUTH_SESSION_KEY = 'agi.mobile.auth_session'
 const BINDING_STATE_KEY = 'agi.mobile.binding_state'
@@ -17,6 +18,19 @@ const LOCATION_STATE_KEY = 'agi.mobile.location_state'
 const CAMERA_STATE_KEY = 'agi.mobile.camera_state'
 const AUDIO_STATE_KEY = 'agi.mobile.audio_state'
 const UPDATE_PROXY_KEY = 'agi.mobile.client_update_proxy_url'
+
+type MobileBindingStore = {
+  version: 1
+  items: Record<string, MobileBindingState>
+}
+
+function emptyBindingStore(): MobileBindingStore {
+  return { version: 1, items: {} }
+}
+
+function bindingScopeKey(serverUrl: string, runtimeId: string): string {
+  return JSON.stringify([serverUrl.trim(), runtimeId.trim()])
+}
 
 function randomUuid(): string {
   const maybeCrypto = globalThis.crypto as { randomUUID?: () => string } | undefined
@@ -71,28 +85,87 @@ async function writeJson(key: string, value: unknown): Promise<void> {
   await writeRaw(key, JSON.stringify(value))
 }
 
-export function readSession(): Promise<AuthSession | null> {
-  return readJson<AuthSession>(AUTH_SESSION_KEY)
+const authSessionStore = createSerializedAsyncValue<AuthSession>(
+  {
+    read: () => readJson<AuthSession>(AUTH_SESSION_KEY),
+    write: (value) => writeJson(AUTH_SESSION_KEY, value),
+    clear: () => deleteRaw(AUTH_SESSION_KEY),
+  },
+  (left, right) => JSON.stringify(left) === JSON.stringify(right),
+)
+
+export const readSession = authSessionStore.read
+
+export const writeSession = authSessionStore.write
+
+export const clearSession = authSessionStore.clear
+
+export const replaceSession = authSessionStore.replace
+
+export const clearSessionIfCurrent = authSessionStore.clearIfCurrent
+
+async function readBindingStore(): Promise<MobileBindingStore> {
+  const stored = await readJson<unknown>(BINDING_STATE_KEY)
+  if (
+    !stored ||
+    typeof stored !== 'object' ||
+    Array.isArray(stored) ||
+    (stored as { version?: unknown }).version !== 1 ||
+    typeof (stored as { items?: unknown }).items !== 'object' ||
+    (stored as { items?: unknown }).items === null ||
+    Array.isArray((stored as { items?: unknown }).items)
+  ) {
+    return emptyBindingStore()
+  }
+  return stored as MobileBindingStore
 }
 
-export function writeSession(value: AuthSession): Promise<void> {
-  return writeJson(AUTH_SESSION_KEY, value)
+export async function readBindingState(serverUrl: string, runtimeId: string): Promise<MobileBindingState | null> {
+  const normalizedServerUrl = serverUrl.trim()
+  const normalizedRuntimeId = runtimeId.trim()
+  if (!normalizedServerUrl || !normalizedRuntimeId) {
+    return null
+  }
+  const store = await readBindingStore()
+  const value = store.items[bindingScopeKey(normalizedServerUrl, normalizedRuntimeId)]
+  if (
+    !value ||
+    typeof value !== 'object' ||
+    typeof value.server_url !== 'string' ||
+    typeof value.runtime_id !== 'string' ||
+    typeof value.runtime_token !== 'string' ||
+    value.server_url !== normalizedServerUrl ||
+    value.runtime_id !== normalizedRuntimeId ||
+    !value.runtime_token.trim()
+  ) {
+    return null
+  }
+  return value
 }
 
-export function clearSession(): Promise<void> {
-  return deleteRaw(AUTH_SESSION_KEY)
+export async function writeBindingState(value: MobileBindingState): Promise<void> {
+  const serverUrl = value.server_url.trim()
+  const runtimeId = value.runtime_id.trim()
+  if (!serverUrl || !runtimeId) {
+    throw new Error('binding server_url and runtime_id are required')
+  }
+  const store = await readBindingStore()
+  store.items[bindingScopeKey(serverUrl, runtimeId)] = {
+    ...value,
+    server_url: serverUrl,
+    runtime_id: runtimeId,
+  }
+  await writeJson(BINDING_STATE_KEY, store)
 }
 
-export function readBindingState(): Promise<MobileBindingState | null> {
-  return readJson<MobileBindingState>(BINDING_STATE_KEY)
-}
-
-export function writeBindingState(value: MobileBindingState): Promise<void> {
-  return writeJson(BINDING_STATE_KEY, value)
-}
-
-export function clearBindingState(): Promise<void> {
-  return deleteRaw(BINDING_STATE_KEY)
+export async function clearBindingState(serverUrl: string, runtimeId: string): Promise<void> {
+  const store = await readBindingStore()
+  delete store.items[bindingScopeKey(serverUrl, runtimeId)]
+  if (Object.keys(store.items).length === 0) {
+    await deleteRaw(BINDING_STATE_KEY)
+    return
+  }
+  await writeJson(BINDING_STATE_KEY, store)
 }
 
 export function readLocationState(): Promise<MobileLocationState | null> {
@@ -148,6 +221,15 @@ export async function ensureRuntimeIdentity(): Promise<RuntimeIdentity> {
   if (existing?.runtime_id) {
     return existing
   }
+  const next: RuntimeIdentity = {
+    runtime_id: randomUuid(),
+    created_at: new Date().toISOString(),
+  }
+  await writeJson(RUNTIME_IDENTITY_KEY, next)
+  return next
+}
+
+export async function rotateRuntimeIdentity(): Promise<RuntimeIdentity> {
   const next: RuntimeIdentity = {
     runtime_id: randomUuid(),
     created_at: new Date().toISOString(),

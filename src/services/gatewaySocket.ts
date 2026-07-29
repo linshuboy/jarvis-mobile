@@ -2,6 +2,12 @@ import { getAudioState, recordAudio, syncAudioState } from './audioFeature'
 import { declaredRuntimeMethods, mobileCapabilities, platformLabel } from './capabilities'
 import { capturePhoto, getCameraState, syncCameraState } from './cameraFeature'
 import { getLocationState, MobileFeatureError, readCurrentLocation, syncLocationState } from './locationFeature'
+import {
+  createSessionScope,
+  LatestScopedRequestGate,
+  sessionMatchesScope,
+  type SessionScope,
+} from './requestScope'
 import { clearBindingState, ensureRuntimeIdentity, readBindingState, readSession, writeBindingState } from '../storage/session'
 import type {
   MobileBindingState,
@@ -18,19 +24,22 @@ const MAX_RECONNECT_DELAY_MS = 30000
 type Listener = (state: MobileGatewayConnectionState) => void
 
 type DesiredConnection = {
+  serverUrl: string
   gatewayWsUrl: string
   runtimeToken: string
   runtime: MobileRuntimeDescriptor
+  sessionScope: SessionScope
 }
 
 let ws: WebSocket | null = null
-let connectRequestId: string | null = null
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null
 let handshakeTimer: ReturnType<typeof setTimeout> | null = null
 let reconnectDelayMs = 1000
 let desiredConnection: DesiredConnection | null = null
 let manuallyStopped = false
+
+const syncRequestGate = new LatestScopedRequestGate()
 
 const listeners = new Set<Listener>()
 
@@ -59,6 +68,34 @@ function updateConnectionState(patch: Partial<MobileGatewayConnectionState>): vo
   for (const listener of listeners) {
     listener(connectionState)
   }
+}
+
+function desiredConnectionKey(connection: DesiredConnection): string {
+  return JSON.stringify([
+    connection.serverUrl,
+    connection.gatewayWsUrl,
+    connection.runtimeToken,
+    connection.runtime.runtime_id,
+    connection.sessionScope.userId,
+    connection.sessionScope.accessToken,
+    connection.sessionScope.refreshToken,
+  ])
+}
+
+function isActiveConnection(socket: WebSocket, connection: DesiredConnection): boolean {
+  return (
+    socket === ws &&
+    desiredConnection !== null &&
+    desiredConnectionKey(desiredConnection) === desiredConnectionKey(connection)
+  )
+}
+
+async function requestSessionIsActive(socket: WebSocket, connection: DesiredConnection): Promise<boolean> {
+  if (!isActiveConnection(socket, connection)) {
+    return false
+  }
+  const session = await readSession()
+  return isActiveConnection(socket, connection) && sessionMatchesScope(session, connection.sessionScope)
 }
 
 function clearHeartbeatTimer(): void {
@@ -94,11 +131,12 @@ function scheduleReconnect(): void {
   }, currentDelay)
 }
 
-function sendJson(payload: unknown): void {
-  if (!ws || ws.readyState !== WebSocket.OPEN) {
+function sendJson(payload: unknown, expectedSocket?: WebSocket): void {
+  const socket = expectedSocket ?? ws
+  if (!socket || socket !== ws || socket.readyState !== WebSocket.OPEN) {
     throw new Error('gateway websocket is not open')
   }
-  ws.send(JSON.stringify(payload))
+  socket.send(JSON.stringify(payload))
 }
 
 function gatewayWsUrl(serverUrl: string): string {
@@ -146,13 +184,14 @@ async function buildRuntimeDescriptor(): Promise<MobileRuntimeDescriptor> {
 }
 
 async function buildStatusPayload(): Promise<Record<string, unknown>> {
-  const [runtime, binding, location, camera, audio] = await Promise.all([
+  const [runtime, session, location, camera, audio] = await Promise.all([
     buildRuntimeDescriptor(),
-    readBindingState(),
+    readSession(),
     getLocationState(),
     getCameraState(),
     getAudioState(),
   ])
+  const binding = session?.server_url ? await readBindingState(session.server_url, runtime.runtime_id) : null
   return {
     runtime_id: runtime.runtime_id,
     pairing_state: binding?.pairing_state || 'unpaired',
@@ -169,23 +208,34 @@ async function buildStatusPayload(): Promise<Record<string, unknown>> {
   }
 }
 
-async function markPairingRequired(nextError: string): Promise<void> {
-  const binding = await readBindingState()
-  desiredConnection = null
-  if (!binding) {
-    return
+async function markPairingRequired(
+  nextError: string,
+  socket: WebSocket,
+  connection: DesiredConnection,
+): Promise<boolean> {
+  if (!(await requestSessionIsActive(socket, connection))) {
+    return false
   }
-  const next: MobileBindingState = {
-    ...binding,
-    runtime_token: '',
-    pairing_state: 'pending',
+  const binding = await readBindingState(connection.serverUrl, connection.runtime.runtime_id)
+  if (!(await requestSessionIsActive(socket, connection))) {
+    return false
   }
-  await writeBindingState(next)
+  if (binding) {
+    const next: MobileBindingState = {
+      ...binding,
+      pairing_state: 'pending',
+    }
+    await writeBindingState(next)
+    if (!(await requestSessionIsActive(socket, connection))) {
+      return false
+    }
+  }
   updateConnectionState({
     online: false,
     connection_state: 'waiting_for_pairing',
     last_error: nextError,
   })
+  return true
 }
 
 function closeSocket(): void {
@@ -199,10 +249,13 @@ function closeSocket(): void {
     }
   }
   ws = null
-  connectRequestId = null
 }
 
-async function handleRequest(frame: Record<string, unknown>): Promise<void> {
+async function handleRequest(
+  frame: Record<string, unknown>,
+  socket: WebSocket,
+  connection: DesiredConnection,
+): Promise<void> {
   const requestId = String(frame.id || '').trim() || 'req'
   const method = String(frame.method || '').trim()
   const params =
@@ -216,23 +269,36 @@ async function handleRequest(frame: Record<string, unknown>): Promise<void> {
         code: 'INVALID_REQUEST',
         message: 'method is required',
       },
-    })
+    }, socket)
     return
   }
   if (method === 'mobile.status.snapshot') {
+    if (!(await requestSessionIsActive(socket, connection))) {
+      return
+    }
+    const payload = await buildStatusPayload()
+    if (!(await requestSessionIsActive(socket, connection))) {
+      return
+    }
     sendJson({
       type: 'res',
       id: requestId,
       ok: true,
-      payload: await buildStatusPayload(),
-    })
+      payload,
+    }, socket)
     return
   }
   if (method === 'location.get') {
     try {
       const accuracy = params.accuracy === 'high' ? 'high' : 'balanced'
+      if (!(await requestSessionIsActive(socket, connection))) {
+        return
+      }
       const fix = await readCurrentLocation({ interactive: false, accuracy })
       const locationState = await getLocationState()
+      if (!(await requestSessionIsActive(socket, connection))) {
+        return
+      }
       sendJson({
         type: 'res',
         id: requestId,
@@ -243,9 +309,12 @@ async function handleRequest(frame: Record<string, unknown>): Promise<void> {
           services_enabled: locationState.services_enabled,
           source: 'expo-location',
         },
-      })
+      }, socket)
     } catch (error) {
       if (error instanceof MobileFeatureError) {
+        if (!(await requestSessionIsActive(socket, connection))) {
+          return
+        }
         sendJson({
           type: 'res',
           id: requestId,
@@ -255,7 +324,7 @@ async function handleRequest(frame: Record<string, unknown>): Promise<void> {
             message: error.message,
             details: error.details,
           },
-        })
+        }, socket)
         return
       }
       throw error
@@ -264,8 +333,14 @@ async function handleRequest(frame: Record<string, unknown>): Promise<void> {
   }
   if (method === 'camera.capture') {
     try {
+      if (!(await requestSessionIsActive(socket, connection))) {
+        return
+      }
       const capture = await capturePhoto({ interactivePermission: false })
       const cameraState = await getCameraState()
+      if (!(await requestSessionIsActive(socket, connection))) {
+        return
+      }
       sendJson({
         type: 'res',
         id: requestId,
@@ -275,9 +350,12 @@ async function handleRequest(frame: Record<string, unknown>): Promise<void> {
           permission_status: cameraState.permission_status,
           source: 'expo-image-picker',
         },
-      })
+      }, socket)
     } catch (error) {
       if (error instanceof MobileFeatureError) {
+        if (!(await requestSessionIsActive(socket, connection))) {
+          return
+        }
         sendJson({
           type: 'res',
           id: requestId,
@@ -287,7 +365,7 @@ async function handleRequest(frame: Record<string, unknown>): Promise<void> {
             message: error.message,
             details: error.details,
           },
-        })
+        }, socket)
         return
       }
       throw error
@@ -302,11 +380,17 @@ async function handleRequest(frame: Record<string, unknown>): Promise<void> {
           : typeof params.durationMs === 'number'
             ? params.durationMs
             : undefined
+      if (!(await requestSessionIsActive(socket, connection))) {
+        return
+      }
       const capture = await recordAudio({
         durationMs,
         interactivePermission: false,
       })
       const audioState = await getAudioState()
+      if (!(await requestSessionIsActive(socket, connection))) {
+        return
+      }
       sendJson({
         type: 'res',
         id: requestId,
@@ -317,9 +401,12 @@ async function handleRequest(frame: Record<string, unknown>): Promise<void> {
           foreground_required: audioState.foreground_required,
           source: 'expo-audio',
         },
-      })
+      }, socket)
     } catch (error) {
       if (error instanceof MobileFeatureError) {
+        if (!(await requestSessionIsActive(socket, connection))) {
+          return
+        }
         sendJson({
           type: 'res',
           id: requestId,
@@ -329,7 +416,7 @@ async function handleRequest(frame: Record<string, unknown>): Promise<void> {
             message: error.message,
             details: error.details,
           },
-        })
+        }, socket)
         return
       }
       throw error
@@ -344,13 +431,13 @@ async function handleRequest(frame: Record<string, unknown>): Promise<void> {
       code: 'METHOD_NOT_SUPPORTED',
       message: `${method} is not supported by mobile companion`,
     },
-  })
+  }, socket)
 }
 
-function scheduleHeartbeat(): void {
+function scheduleHeartbeat(socket: WebSocket, connection: DesiredConnection): void {
   clearHeartbeatTimer()
   heartbeatTimer = setInterval(() => {
-    if (!desiredConnection) {
+    if (!isActiveConnection(socket, connection)) {
       return
     }
     const now = new Date().toISOString()
@@ -359,13 +446,13 @@ function scheduleHeartbeat(): void {
         type: 'event',
         event: 'node.heartbeat',
         payload: {
-          runtimeId: desiredConnection.runtime.runtime_id,
+          runtimeId: connection.runtime.runtime_id,
           ttlSeconds: RUNTIME_TTL_SECONDS,
           runtime: {
-            displayName: desiredConnection.runtime.display_name,
-            metadata: desiredConnection.runtime.metadata,
+            displayName: connection.runtime.display_name,
+            metadata: connection.runtime.metadata,
           },
-          components: desiredConnection.runtime.components.map((item) => ({
+          components: connection.runtime.components.map((item) => ({
             componentId: item.component_id,
             health: {
               status: item.health.status,
@@ -374,8 +461,11 @@ function scheduleHeartbeat(): void {
             metadata: item.metadata,
           })),
         },
-      })
+      }, socket)
     } catch (error) {
+      if (!isActiveConnection(socket, connection)) {
+        return
+      }
       updateConnectionState({
         online: false,
         connection_state: 'reconnecting',
@@ -397,50 +487,51 @@ async function openConnection(): Promise<void> {
   clearReconnectTimer()
   clearHandshakeTimer()
   manuallyStopped = false
-  connectRequestId = randomId()
+  const connection = desiredConnection
+  const requestId = randomId()
   updateConnectionState({
-    gateway_ws_url: desiredConnection.gatewayWsUrl,
+    gateway_ws_url: connection.gatewayWsUrl,
     online: false,
     connection_state: 'connecting',
   })
 
-  const socket = new WebSocket(desiredConnection.gatewayWsUrl)
+  const socket = new WebSocket(connection.gatewayWsUrl)
   ws = socket
 
   socket.onopen = () => {
-    if (!desiredConnection || socket !== ws) {
+    if (!isActiveConnection(socket, connection)) {
       return
     }
     const now = new Date().toISOString()
     try {
       sendJson({
         type: 'req',
-        id: connectRequestId,
+        id: requestId,
         method: 'connect',
         params: {
           minProtocol: 1,
           maxProtocol: 1,
           client: {
-            id: desiredConnection.runtime.runtime_id,
-            version: desiredConnection.runtime.runtime_version,
-            platform: desiredConnection.runtime.platform,
+            id: connection.runtime.runtime_id,
+            version: connection.runtime.runtime_version,
+            platform: connection.runtime.platform,
             mode: 'runtime_components',
           },
           role: 'node',
           auth: {
-            token: desiredConnection.runtimeToken,
+            token: connection.runtimeToken,
           },
           ttlSeconds: RUNTIME_TTL_SECONDS,
           runtime: {
-            id: desiredConnection.runtime.runtime_id,
-            displayName: desiredConnection.runtime.display_name,
-            hostname: desiredConnection.runtime.hostname,
-            platform: desiredConnection.runtime.platform,
-            version: desiredConnection.runtime.runtime_version,
-            metadata: desiredConnection.runtime.metadata,
+            id: connection.runtime.runtime_id,
+            displayName: connection.runtime.display_name,
+            hostname: connection.runtime.hostname,
+            platform: connection.runtime.platform,
+            version: connection.runtime.runtime_version,
+            metadata: connection.runtime.metadata,
             ttlSeconds: RUNTIME_TTL_SECONDS,
           },
-          components: desiredConnection.runtime.components.map((item) => ({
+          components: connection.runtime.components.map((item) => ({
             componentId: item.component_id,
             kind: item.kind,
             methods: item.methods,
@@ -451,8 +542,11 @@ async function openConnection(): Promise<void> {
             metadata: item.metadata,
           })),
         },
-      })
+      }, socket)
       handshakeTimer = setTimeout(() => {
+        if (!isActiveConnection(socket, connection)) {
+          return
+        }
         updateConnectionState({
           online: false,
           connection_state: 'connect_timeout',
@@ -462,6 +556,9 @@ async function openConnection(): Promise<void> {
         scheduleReconnect()
       }, HANDSHAKE_TIMEOUT_MS)
     } catch (error) {
+      if (!isActiveConnection(socket, connection)) {
+        return
+      }
       updateConnectionState({
         online: false,
         connection_state: 'connect_failed',
@@ -474,6 +571,9 @@ async function openConnection(): Promise<void> {
 
   socket.onmessage = (event) => {
     void (async () => {
+      if (!isActiveConnection(socket, connection)) {
+        return
+      }
       let frame: Record<string, unknown>
       try {
         frame = JSON.parse(String(event.data || '{}')) as Record<string, unknown>
@@ -488,7 +588,7 @@ async function openConnection(): Promise<void> {
         return
       }
 
-      if (frame.type === 'res' && String(frame.id || '') === connectRequestId) {
+      if (frame.type === 'res' && String(frame.id || '') === requestId) {
         clearHandshakeTimer()
         if (frame.ok === true) {
           reconnectDelayMs = 1000
@@ -498,7 +598,7 @@ async function openConnection(): Promise<void> {
             last_connected_at: new Date().toISOString(),
             last_error: '',
           })
-          scheduleHeartbeat()
+          scheduleHeartbeat(socket, connection)
           return
         }
         const errorPayload =
@@ -506,8 +606,12 @@ async function openConnection(): Promise<void> {
         const errorCode = String(errorPayload.code || '')
         const errorMessage = String(errorPayload.message || 'gateway connect rejected')
         if (errorCode === 'PAIRING_REQUIRED') {
-          await markPairingRequired(errorMessage)
+          const marked = await markPairingRequired(errorMessage, socket, connection)
+          if (!marked || !isActiveConnection(socket, connection)) {
+            return
+          }
           manuallyStopped = true
+          desiredConnection = null
           clearReconnectTimer()
         } else {
           updateConnectionState({
@@ -523,8 +627,11 @@ async function openConnection(): Promise<void> {
 
       if (frame.type === 'req') {
         try {
-          await handleRequest(frame)
+          await handleRequest(frame, socket, connection)
         } catch (error) {
+          if (!isActiveConnection(socket, connection)) {
+            return
+          }
           updateConnectionState({
             online: false,
             connection_state: 'handler_error',
@@ -536,6 +643,9 @@ async function openConnection(): Promise<void> {
   }
 
   socket.onerror = () => {
+    if (!isActiveConnection(socket, connection)) {
+      return
+    }
     updateConnectionState({
       online: false,
       connection_state: 'error',
@@ -544,6 +654,9 @@ async function openConnection(): Promise<void> {
   }
 
   socket.onclose = () => {
+    if (!isActiveConnection(socket, connection)) {
+      return
+    }
     clearHandshakeTimer()
     clearHeartbeatTimer()
     const nextState =
@@ -576,10 +689,23 @@ export function subscribeGatewayConnection(listener: Listener): () => void {
 }
 
 export async function syncMobileGatewayConnection(): Promise<MobileGatewayConnectionState> {
-  const [session, binding, runtime] = await Promise.all([readSession(), readBindingState(), buildRuntimeDescriptor()])
-  await syncLocationState({ interactive: false, refreshFix: false })
-  await syncCameraState({ interactive: false })
-  await syncAudioState({ interactive: false })
+  const ticket = syncRequestGate.begin()
+  const [session, runtime] = await Promise.all([readSession(), buildRuntimeDescriptor()])
+  if (!syncRequestGate.isCurrent(ticket)) {
+    return connectionState
+  }
+  const binding = session?.server_url ? await readBindingState(session.server_url, runtime.runtime_id) : null
+  if (!syncRequestGate.isCurrent(ticket)) {
+    return connectionState
+  }
+  await Promise.all([
+    syncLocationState({ interactive: false, refreshFix: false }),
+    syncCameraState({ interactive: false }),
+    syncAudioState({ interactive: false }),
+  ])
+  if (!syncRequestGate.isCurrent(ticket)) {
+    return connectionState
+  }
   const hasAuth = Boolean(session?.server_url && session.access_token && session.refresh_token)
   const hasBinding = Boolean(binding?.runtime_token)
   if (!hasAuth || !hasBinding || !session || !binding) {
@@ -597,14 +723,17 @@ export async function syncMobileGatewayConnection(): Promise<MobileGatewayConnec
   }
 
   const nextDesired: DesiredConnection = {
+    serverUrl: session.server_url,
     gatewayWsUrl: gatewayWsUrl(session.server_url),
     runtimeToken: binding.runtime_token,
     runtime,
+    sessionScope: createSessionScope(session),
   }
-  const currentKey = desiredConnection
-    ? `${desiredConnection.gatewayWsUrl}|${desiredConnection.runtimeToken}|${desiredConnection.runtime.runtime_id}`
-    : ''
-  const nextKey = `${nextDesired.gatewayWsUrl}|${nextDesired.runtimeToken}|${nextDesired.runtime.runtime_id}`
+  const currentKey = desiredConnection ? desiredConnectionKey(desiredConnection) : ''
+  const nextKey = desiredConnectionKey(nextDesired)
+  if (!syncRequestGate.isCurrent(ticket)) {
+    return connectionState
+  }
   desiredConnection = nextDesired
   updateConnectionState({
     gateway_ws_url: nextDesired.gatewayWsUrl,
@@ -619,6 +748,7 @@ export async function syncMobileGatewayConnection(): Promise<MobileGatewayConnec
 }
 
 export async function disconnectMobileGatewayConnection(): Promise<MobileGatewayConnectionState> {
+  syncRequestGate.invalidate()
   manuallyStopped = true
   desiredConnection = null
   clearReconnectTimer()
@@ -631,6 +761,9 @@ export async function disconnectMobileGatewayConnection(): Promise<MobileGateway
 }
 
 export async function revokeMobileBindingLocally(): Promise<void> {
-  await clearBindingState()
+  const [session, runtime] = await Promise.all([readSession(), buildRuntimeDescriptor()])
+  if (session?.server_url) {
+    await clearBindingState(session.server_url, runtime.runtime_id)
+  }
   await disconnectMobileGatewayConnection()
 }

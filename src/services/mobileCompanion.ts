@@ -9,12 +9,14 @@ import {
   syncMobileGatewayConnection,
 } from './gatewaySocket'
 import { getLocationState, syncLocationState } from './locationFeature'
+import { LatestScopedRequestGate, type ScopedRequestTicket } from './requestScope'
 import {
-  clearBindingState,
-  clearSession,
+  clearSessionIfCurrent,
   ensureRuntimeIdentity,
   readBindingState,
   readSession,
+  replaceSession,
+  rotateRuntimeIdentity,
   writeBindingState,
   writeSession,
 } from '../storage/session'
@@ -42,6 +44,46 @@ class ApiError extends Error {
   }
 }
 
+class SupersededAuthOperationError extends Error {
+  constructor() {
+    super('authentication operation was superseded')
+  }
+}
+
+const authRequestGate = new LatestScopedRequestGate()
+
+function assertAuthOperationCurrent(ticket: ScopedRequestTicket): void {
+  if (!authRequestGate.isCurrent(ticket)) {
+    throw new SupersededAuthOperationError()
+  }
+}
+
+async function writeSessionForOperation(session: AuthSession, ticket: ScopedRequestTicket): Promise<void> {
+  assertAuthOperationCurrent(ticket)
+  await writeSession(session)
+  assertAuthOperationCurrent(ticket)
+}
+
+async function replaceSessionForOperation(
+  expected: AuthSession,
+  session: AuthSession,
+  ticket: ScopedRequestTicket,
+): Promise<void> {
+  assertAuthOperationCurrent(ticket)
+  const replaced = await replaceSession(expected, session)
+  if (!replaced) {
+    throw new SupersededAuthOperationError()
+  }
+  assertAuthOperationCurrent(ticket)
+}
+
+async function currentAuthState(
+  bootstrapInitDone: boolean | null,
+  authError: string | null,
+): Promise<MobileCompanionState> {
+  return authState(await readSession(), bootstrapInitDone, authError)
+}
+
 function normalizeServerUrl(value: string): string {
   const trimmed = value.trim()
   if (!trimmed) {
@@ -59,6 +101,9 @@ function normalizeServerUrl(value: string): string {
   }
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
     throw new Error(`server_url scheme must be http or https, got ${parsed.protocol.replace(':', '')}`)
+  }
+  if (parsed.username || parsed.password) {
+    throw new Error('server_url must not include credentials')
   }
   if (!parsed.pathname.endsWith('/')) {
     parsed.pathname = `${parsed.pathname}/`
@@ -262,15 +307,20 @@ function extractInviteCode(invite: BindingInviteResponse): string {
   throw new Error('binding invite response did not include invite_code')
 }
 
-async function claimInvite(session: AuthSession): Promise<MobileBindingState> {
-  const runtime = await buildRuntime()
+async function claimInvite(session: AuthSession, ticket: ScopedRequestTicket): Promise<MobileBindingState> {
+  let runtime = await buildRuntime()
+  assertAuthOperationCurrent(ticket)
+  let currentBinding = await readBindingState(session.server_url, runtime.runtime_id)
+  assertAuthOperationCurrent(ticket)
   const invite = await createInvite(session)
+  assertAuthOperationCurrent(ticket)
   const inviteCode = extractInviteCode(invite)
-  const claim = decodeClaim(
-    await requestJson(session.server_url, 'api/host/runtime/invites/claim', {
+  const submitClaim = (): Promise<unknown> =>
+    requestJson(session.server_url, 'api/host/runtime/invites/claim', {
       method: 'POST',
       body: {
         invite_code: inviteCode,
+        current_runtime_token: currentBinding?.runtime_token || undefined,
         runtime: {
           runtime_id: runtime.runtime_id,
           display_name: runtime.display_name,
@@ -281,9 +331,31 @@ async function claimInvite(session: AuthSession): Promise<MobileBindingState> {
         },
         components: runtime.components,
       },
-    }),
-  )
+    })
+  let claimPayload: unknown
+  try {
+    claimPayload = await submitClaim()
+  } catch (error) {
+    if (!(error instanceof ApiError) || error.code !== 'unauthorized') {
+      throw error
+    }
+    assertAuthOperationCurrent(ticket)
+    await rotateRuntimeIdentity()
+    assertAuthOperationCurrent(ticket)
+    runtime = await buildRuntime()
+    currentBinding = null
+    claimPayload = await submitClaim()
+  }
+  assertAuthOperationCurrent(ticket)
+  const claim = decodeClaim(claimPayload)
+  if (claim.runtime_id !== runtime.runtime_id) {
+    throw new Error('binding claim runtime_id does not match this device')
+  }
+  if (!claim.runtime_token.trim()) {
+    throw new Error('binding claim did not include runtime_token')
+  }
   const binding: MobileBindingState = {
+    server_url: session.server_url,
     runtime_id: claim.runtime_id,
     runtime_token: claim.runtime_token,
     pairing_state: claim.pairing_state,
@@ -292,28 +364,30 @@ async function claimInvite(session: AuthSession): Promise<MobileBindingState> {
     owner_user_id: claim.owner_user_id ?? null,
     bound_at: new Date().toISOString(),
   }
+  assertAuthOperationCurrent(ticket)
   await writeBindingState(binding)
+  assertAuthOperationCurrent(ticket)
   return binding
 }
 
-async function refreshSession(session: AuthSession): Promise<AuthSession> {
+async function refreshSession(session: AuthSession, ticket: ScopedRequestTicket): Promise<AuthSession> {
   const refreshed = decodeAuthResponse(
     await requestJson(session.server_url, 'api/auth/refresh', {
       method: 'POST',
       body: { refresh_token: session.refresh_token },
     }),
   )
+  assertAuthOperationCurrent(ticket)
   const next: AuthSession = {
     server_url: session.server_url,
     access_token: refreshed.access_token,
     refresh_token: refreshed.refresh_token,
     user: refreshed.user,
   }
-  await writeSession(next)
   return next
 }
 
-async function meWithRefresh(session: AuthSession): Promise<AuthSession> {
+async function meWithRefresh(session: AuthSession, ticket: ScopedRequestTicket): Promise<AuthSession> {
   try {
     const payload = assertObject(
       await requestJson(session.server_url, 'api/auth/me', {
@@ -321,11 +395,12 @@ async function meWithRefresh(session: AuthSession): Promise<AuthSession> {
       }),
       'me',
     )
+    assertAuthOperationCurrent(ticket)
     const next: AuthSession = {
       ...session,
       user: decodeUser(payload.user),
     }
-    await writeSession(next)
+    await replaceSessionForOperation(session, next, ticket)
     return next
   } catch (error) {
     if (!(error instanceof ApiError) || error.code !== 'unauthorized') {
@@ -334,31 +409,36 @@ async function meWithRefresh(session: AuthSession): Promise<AuthSession> {
     if (!session.refresh_token.trim()) {
       throw error
     }
-    const refreshed = await refreshSession(session)
+    assertAuthOperationCurrent(ticket)
+    const refreshed = await refreshSession(session, ticket)
     const payload = assertObject(
       await requestJson(refreshed.server_url, 'api/auth/me', {
         accessToken: refreshed.access_token,
       }),
       'me',
     )
+    assertAuthOperationCurrent(ticket)
     const next: AuthSession = {
       ...refreshed,
       user: decodeUser(payload.user),
     }
-    await writeSession(next)
+    await replaceSessionForOperation(session, next, ticket)
     return next
   }
 }
 
 export async function getMobileSnapshot(): Promise<MobileCompanionSnapshot> {
-  const [session, binding, runtime, location, camera, audio] = await Promise.all([
+  const [session, runtime, location, camera, audio] = await Promise.all([
     readSession(),
-    readBindingState(),
     buildRuntime(),
     getLocationState(),
     getCameraState(),
     getAudioState(),
   ])
+  const binding =
+    session?.server_url && session.access_token && session.refresh_token
+      ? await readBindingState(session.server_url, runtime.runtime_id)
+      : null
   return {
     auth: authState(session, null, null),
     binding,
@@ -372,52 +452,73 @@ export async function getMobileSnapshot(): Promise<MobileCompanionSnapshot> {
 }
 
 export async function syncMobileAuthState(): Promise<MobileCompanionState> {
+  const ticket = authRequestGate.begin()
   const session = await readSession()
+  assertAuthOperationCurrent(ticket)
   if (!session?.server_url) {
     return authState(session, null, null)
   }
   const bootstrap = decodeBootstrap(await requestJson(session.server_url, 'api/auth/bootstrap/status'))
+  assertAuthOperationCurrent(ticket)
   if (!bootstrap.init_done) {
     const next = authState(session, false, '服务端尚未初始化，请先在 Web 端完成初始化')
-    await writeSession({
+    await replaceSessionForOperation(session, {
       server_url: session.server_url,
       access_token: '',
       refresh_token: '',
       user: null,
-    })
+    }, ticket)
     await disconnectMobileGatewayConnection()
+    assertAuthOperationCurrent(ticket)
     await syncLocationState({ interactive: false, refreshFix: false })
     await syncCameraState({ interactive: false })
     await syncAudioState({ interactive: false })
+    assertAuthOperationCurrent(ticket)
     return next
   }
   if (!session.access_token || !session.refresh_token) {
     await disconnectMobileGatewayConnection()
+    assertAuthOperationCurrent(ticket)
     await syncLocationState({ interactive: false, refreshFix: false })
     await syncCameraState({ interactive: false })
     await syncAudioState({ interactive: false })
+    assertAuthOperationCurrent(ticket)
     return authState(session, true, null)
   }
   try {
-    const nextSession = await meWithRefresh(session)
+    const nextSession = await meWithRefresh(session, ticket)
+    assertAuthOperationCurrent(ticket)
     await syncMobileGatewayConnection()
+    assertAuthOperationCurrent(ticket)
     await syncLocationState({ interactive: false, refreshFix: false })
     await syncCameraState({ interactive: false })
     await syncAudioState({ interactive: false })
+    assertAuthOperationCurrent(ticket)
     return authState(nextSession, true, null)
   } catch (error) {
+    if (error instanceof SupersededAuthOperationError || !authRequestGate.isCurrent(ticket)) {
+      return currentAuthState(null, null)
+    }
     const next: AuthSession = {
       server_url: session.server_url,
       access_token: '',
       refresh_token: '',
       user: null,
     }
-    await writeSession(next)
-    await clearBindingState()
+    try {
+      await replaceSessionForOperation(session, next, ticket)
+    } catch (replaceError) {
+      if (replaceError instanceof SupersededAuthOperationError) {
+        return currentAuthState(null, null)
+      }
+      throw replaceError
+    }
     await disconnectMobileGatewayConnection()
+    assertAuthOperationCurrent(ticket)
     await syncLocationState({ interactive: false, refreshFix: false })
     await syncCameraState({ interactive: false })
     await syncAudioState({ interactive: false })
+    assertAuthOperationCurrent(ticket)
     return authState(next, true, error instanceof Error ? error.message : '同步登录态失败')
   }
 }
@@ -428,6 +529,7 @@ export async function loginMobileCompanion(
   password: string,
 ): Promise<{ auth: MobileCompanionState; binding: MobileBindingState | null }> {
   const normalizedServerUrl = normalizeServerUrl(serverUrl)
+  const ticket = authRequestGate.begin(normalizedServerUrl)
   const normalizedUsername = username.trim()
   if (!normalizedUsername) {
     throw new Error('username is required')
@@ -436,6 +538,7 @@ export async function loginMobileCompanion(
     throw new Error('password is required')
   }
   const bootstrap = decodeBootstrap(await requestJson(normalizedServerUrl, 'api/auth/bootstrap/status'))
+  assertAuthOperationCurrent(ticket)
   if (!bootstrap.init_done) {
     throw new Error('服务端尚未初始化，移动端不提供初始化流程')
   }
@@ -448,21 +551,29 @@ export async function loginMobileCompanion(
       },
     }),
   )
+  assertAuthOperationCurrent(ticket)
   const session: AuthSession = {
     server_url: normalizedServerUrl,
     access_token: auth.access_token,
     refresh_token: auth.refresh_token,
     user: auth.user,
   }
-  await writeSession(session)
+  await disconnectMobileGatewayConnection()
+  assertAuthOperationCurrent(ticket)
+  await writeSessionForOperation(session, ticket)
   try {
-    const binding = await claimInvite(session)
+    const binding = await claimInvite(session, ticket)
+    assertAuthOperationCurrent(ticket)
     await syncMobileGatewayConnection()
+    assertAuthOperationCurrent(ticket)
     return {
       auth: authState(session, true, null),
       binding,
     }
   } catch (error) {
+    if (error instanceof SupersededAuthOperationError || !authRequestGate.isCurrent(ticket)) {
+      throw new SupersededAuthOperationError()
+    }
     return {
       auth: authState(session, true, error instanceof Error ? error.message : '当前设备自动绑定失败'),
       binding: null,
@@ -471,18 +582,24 @@ export async function loginMobileCompanion(
 }
 
 export async function bindCurrentMobileRuntime(): Promise<MobileBindingState> {
+  const ticket = authRequestGate.begin()
   const session = await readSession()
+  assertAuthOperationCurrent(ticket)
   if (!session?.server_url || !session.access_token || !session.refresh_token) {
     throw new Error('请先登录账号')
   }
-  const activeSession = await meWithRefresh(session)
-  const binding = await claimInvite(activeSession)
+  const activeSession = await meWithRefresh(session, ticket)
+  const binding = await claimInvite(activeSession, ticket)
+  assertAuthOperationCurrent(ticket)
   await syncMobileGatewayConnection()
+  assertAuthOperationCurrent(ticket)
   return binding
 }
 
 export async function logoutMobileCompanion(): Promise<MobileCompanionState> {
+  const ticket = authRequestGate.begin()
   const session = await readSession()
+  assertAuthOperationCurrent(ticket)
   if (session?.server_url && session.refresh_token.trim()) {
     try {
       await requestJson(session.server_url, 'api/auth/logout', {
@@ -493,9 +610,10 @@ export async function logoutMobileCompanion(): Promise<MobileCompanionState> {
       // keep logout best-effort
     }
   }
+  assertAuthOperationCurrent(ticket)
   const preservedServerUrl = session?.server_url || ''
-  await clearBindingState()
   await disconnectMobileGatewayConnection()
+  assertAuthOperationCurrent(ticket)
   if (preservedServerUrl) {
     const next: AuthSession = {
       server_url: preservedServerUrl,
@@ -503,9 +621,15 @@ export async function logoutMobileCompanion(): Promise<MobileCompanionState> {
       refresh_token: '',
       user: null,
     }
-    await writeSession(next)
+    if (!session) {
+      throw new SupersededAuthOperationError()
+    }
+    await replaceSessionForOperation(session, next, ticket)
     return authState(next, true, null)
   }
-  await clearSession()
+  const cleared = await clearSessionIfCurrent(session)
+  if (!cleared || !authRequestGate.isCurrent(ticket)) {
+    return currentAuthState(null, null)
+  }
   return authState(null, null, null)
 }

@@ -1,7 +1,7 @@
-import { nativeTokens, roleTones } from '@agi/frontend'
+import { nativeTokens, roleTones } from '@agi/frontend/native'
 
 const mobileSharedImportSmoke = {
-  canvas: nativeTokens.color.background.canvas,
+  canvas: nativeTokens.color.surface.canvas,
   machineLabel: roleTones.machine.label,
 }
 
